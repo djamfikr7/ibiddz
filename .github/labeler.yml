@@ -1,0 +1,32 @@
+backend:
+  - changed-files:
+      - any-glob-to-any-file: "apps/api/**"
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file: "apps/web/**"
+
+database:
+  - changed-files:
+      - any-glob-to-any-file: "packages/db/**"
+
+shared:
+  - changed-files:
+      - any-glob-to-any-file: "packages/shared/**"
+
+infrastructure:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docker-compose*.yml"
+          - ".github/workflows/**"
+          - "Dockerfile"
+          - "apps/api/Dockerfile"
+          - "apps/web/Dockerfile"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file: "**/*.md"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: "**/*.spec.ts"

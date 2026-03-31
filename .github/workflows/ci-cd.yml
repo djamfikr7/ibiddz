@@ -2,18 +2,26 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'feature/**', 'fix/**']
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 env:
   NODE_VERSION: "20"
   TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
   TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Test
+  # ─────────────────────────────────────────────
+  # PR CHECKS (runs on every PR and push)
+  # ─────────────────────────────────────────────
+  lint:
+    name: Lint & Format
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,24 +39,144 @@ jobs:
       - name: Lint
         run: npx turbo run lint
 
-      - name: Type check
-        run: npx turbo run typecheck
+      - name: Check formatting
+        run: npx prettier --check "**/*.{ts,tsx,js,json,md}" || (echo "Run 'npx prettier --write .' to fix" && exit 1)
 
-      - name: Build shared packages
-        run: npx turbo run build --filter=@ibiddz/shared
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/db/prisma/schema.prisma
+
+      - name: Type check API
+        run: npx tsc --noEmit -p apps/api/tsconfig.json
+
+      - name: Type check Web
+        run: npx tsc --noEmit -p apps/web/tsconfig.json
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: ibiddz_test
+          POSTGRES_USER: ibiddz
+          POSTGRES_PASSWORD: ibiddz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/db/prisma/schema.prisma
+
+      - name: Push schema to test DB
+        run: npx prisma db push --schema=packages/db/prisma/schema.prisma --accept-data-loss
+        env:
+          DATABASE_URL: postgresql://ibiddz:ibiddz_test@localhost:5432/ibiddz_test
 
       - name: Run tests
         run: npx turbo run test
         env:
-          DATABASE_URL: postgresql://ibiddz:ibiddz@localhost:5432/ibiddz_test
+          DATABASE_URL: postgresql://ibiddz:ibiddz_test@localhost:5432/ibiddz_test
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret
+          JWT_REFRESH_SECRET: test-refresh-secret
 
-  build-api:
-    name: Build API
-    needs: test
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-coverage
+          path: apps/api/coverage/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # PR-SPECIFIC CHECKS
+  # ─────────────────────────────────────────────
+  pr-title-check:
+    name: PR Title Convention
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Check PR title
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+
+  pr-labeler:
+    name: Auto Label PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────
+  # BUILD (only on main/develop pushes)
+  # ─────────────────────────────────────────────
+  build-api:
+    name: Build API Image
+    needs: [lint, typecheck, test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,16 +197,16 @@ jobs:
           file: apps/api/Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/ibiddz-api:latest
+            ${{ secrets.DOCKER_USERNAME }}/ibiddz-api:${{ github.ref == 'refs/heads/main' && 'latest' || 'develop' }}
             ${{ secrets.DOCKER_USERNAME }}/ibiddz-api:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   build-web:
-    name: Build Web
-    needs: test
+    name: Build Web Image
+    needs: [lint, typecheck, test]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,18 +227,22 @@ jobs:
           file: apps/web/Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/ibiddz-web:latest
+            ${{ secrets.DOCKER_USERNAME }}/ibiddz-web:${{ github.ref == 'refs/heads/main' && 'latest' || 'develop' }}
             ${{ secrets.DOCKER_USERNAME }}/ibiddz-web:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ─────────────────────────────────────────────
+  # DEPLOY (only on main pushes)
+  # ─────────────────────────────────────────────
   deploy:
-    name: Deploy
+    name: Deploy to Production
     needs: [build-api, build-web]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
     steps:
-      - name: Deploy to production
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -121,3 +253,18 @@ jobs:
             docker compose pull
             docker compose up -d --remove-orphans
             docker system prune -af
+
+      - name: Notify deployment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: '${{ job.status }}',
+              description: `Deployment ${status}`,
+              context: 'deploy/production',
+            });
