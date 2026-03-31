@@ -1,0 +1,26 @@
+{
+  "name": "@ibiddz/db",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./prisma/generated/index.js",
+  "types": "./prisma/generated/index.d.ts",
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:status": "prisma migrate status",
+    "migrate:reset": "prisma migrate reset",
+    "studio": "prisma studio",
+    "push": "prisma db push",
+    "seed": "prisma db seed",
+    "format": "prisma format",
+    "validate": "prisma validate"
+  },
+  "devDependencies": {
+    "prisma": "^5.22.0",
+    "@prisma/client": "^5.22.0"
+  },
+  "peerDependencies": {
+    "@prisma/client": "^5.22.0"
+  }
+}

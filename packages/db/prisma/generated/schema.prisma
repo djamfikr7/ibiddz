@@ -1,0 +1,853 @@
+// iBidDZ — Prisma Schema
+// Algerian iPhone Marketplace with Live Auctions
+// Database: PostgreSQL 15
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  BASICO
+  PRO
+  CERTIFIE
+  ELITE
+  ADMIN
+  MODERATOR
+  FINANCE
+  SUPPORT
+  COURIER_LIAISON
+}
+
+enum BanStatus {
+  NONE
+  WARNING
+  TEMPORARY
+  PERMANENT
+}
+
+enum ListingCondition {
+  LIKE_NEW
+  EXCELLENT
+  GOOD
+  FAIR
+}
+
+enum ListingStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  PAUSED
+  SOLD
+  EXPIRED
+  REMOVED
+  REJECTED
+}
+
+enum AuctionType {
+  LIVE
+  TIMED
+  BUY_NOW
+  OFFER
+}
+
+enum BidType {
+  MANUAL
+  PROXY
+  AUTO
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  REFUNDED
+  DISPUTED
+}
+
+enum PaymentMethod {
+  COD
+  CCP
+  EDAHABIA
+  BANK_TRANSFER
+  WALLET
+}
+
+enum PayoutMethod {
+  CCP
+  EDAHABIA
+  BANK
+}
+
+enum PayoutStatus {
+  PENDING
+  APPROVED
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  CLOSED
+  ESCALATED
+}
+
+enum DisputeResolution {
+  BUYER_FAVOR
+  SELLER_FAVOR
+  PARTIAL_REFUND
+  FULL_REFUND
+  NO_ACTION
+}
+
+enum BroadcastChannel {
+  PUSH
+  SMS
+  EMAIL
+  IN_APP
+  WHATSAPP
+}
+
+enum BroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum ModerationStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  ACTION_TAKEN
+}
+
+enum ModerationAction {
+  NONE
+  WARNING
+  SUSPEND_LISTING
+  SUSPEND_USER
+  REQUIRE_VERIFICATION
+  PERMANENT_BAN
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  SUSPEND
+  UNSUSPEND
+  REFUND
+  PAYOUT_APPROVE
+  PAYOUT_REJECT
+  DISPUTE_RESOLVE
+  ADMIN_LOGIN
+  ROLE_CHANGE
+}
+
+enum NotificationType {
+  BID_PLACED
+  BID_OUTBID
+  AUCTION_WON
+  AUCTION_LOST
+  LISTING_APPROVED
+  LISTING_REJECTED
+  ORDER_CONFIRMED
+  ORDER_SHIPPED
+  ORDER_DELIVERED
+  PAYMENT_RECEIVED
+  PAYOUT_PROCESSED
+  DISPUTE_OPENED
+  DISPUTE_RESOLVED
+  SYSTEM_ALERT
+  BROADCAST
+  FOLLOW
+  REVIEW_RECEIVED
+  VERIFICATION_SUCCESS
+  VERIFICATION_FAILED
+  STRIKE_WARNING
+}
+
+enum NotificationChannel {
+  PUSH
+  SMS
+  EMAIL
+  IN_APP
+}
+
+enum VerificationMethod {
+  SMS
+  WHATSAPP
+  VOICE
+}
+
+// ─────────────────────────────────────────────
+// MODELS
+// ─────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  phone         String    @unique
+  phoneVerified Boolean   @default(false)
+  trustScore    Int       @default(50)
+  strikeCount   Int       @default(0)
+  banStatus     BanStatus @default(NONE)
+  walletDZD     Decimal   @default(0) @db.Decimal(12, 2)
+  role          UserRole  @default(BASICO)
+  displayName   String?
+  avatarUrl     String?
+  bio           String?
+
+  // CNIE (National ID) data
+  cnieNumber     String?   @unique
+  cnieFrontUrl   String?
+  cnieBackUrl    String?
+  cnieVerified   Boolean   @default(false)
+  cnieVerifiedAt DateTime?
+
+  // Device fingerprinting
+  deviceFingerprint     String?
+  lastDeviceFingerprint String?
+  lastLoginAt           DateTime?
+  lastLoginIp           String?
+
+  // Subscription
+  subscriptionStart DateTime?
+  subscriptionEnd   DateTime?
+  subscriptionTier  String?
+  broadcastCredits  Int       @default(0)
+
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  listings              Listing[]
+  bids                  Bid[]
+  ordersAsBuyer         Order[]           @relation("BuyerOrders")
+  ordersAsSeller        Order[]           @relation("SellerOrders")
+  reviewsAsReviewer     Review[]          @relation("ReviewerReviews")
+  reviewsAsTarget       Review[]          @relation("TargetReviews")
+  broadcastsSent        Broadcast[]
+  followers             Follow[]          @relation("Following")
+  followings            Follow[]          @relation("Follower")
+  otpVerifications      OTPVerification[] @relation("UserOtpVerifications")
+  payoutRequests        PayoutRequest[]
+  disputesAsReporter    Dispute[]         @relation("DisputeReporter")
+  disputesAsTarget      Dispute[]         @relation("DisputeTarget")
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  moderationQueue       ModerationQueue[]
+  conversationsAsBuyer  Conversation[]    @relation("ConversationBuyer")
+  conversationsAsSeller Conversation[]    @relation("ConversationSeller")
+  blocksAsBlocker       Block[]           @relation("Blocker")
+  blocksAsBlocked       Block[]           @relation("Blocked")
+
+  @@index([phone])
+  @@index([role])
+  @@index([banStatus])
+  @@index([trustScore])
+  @@index([cnieNumber])
+  @@index([createdAt])
+}
+
+model Listing {
+  id       String @id @default(cuid())
+  sellerId String
+  seller   User   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  // Product details
+  title             String
+  description       String
+  model             String // e.g. "iPhone 15 Pro Max"
+  storageGB         Int // e.g. 256
+  color             String
+  condition         ListingCondition
+  batteryHealth     Int // percentage 0-100
+  imeiHash          String? // hashed IMEI for privacy
+  accessories       Json? // array of included accessories
+  originalBox       Boolean          @default(false)
+  warrantyRemaining Int              @default(0) // months
+
+  // Pricing
+  startingPrice Decimal  @db.Decimal(12, 2)
+  buyNowPrice   Decimal? @db.Decimal(12, 2)
+  reservePrice  Decimal? @db.Decimal(12, 2)
+  currentBid    Decimal? @db.Decimal(12, 2)
+  bidCount      Int      @default(0)
+
+  // Auction config
+  auctionType     AuctionType @default(LIVE)
+  auctionStart    DateTime?
+  auctionEnd      DateTime?
+  durationMinutes Int?
+  hasBuyNow       Boolean     @default(false)
+  acceptOffers    Boolean     @default(false)
+
+  // Photos & media
+  photos     Json // array of photo URLs
+  coverPhoto String
+  videoUrl   String?
+  watermarks Json? // watermark config
+
+  // Status
+  status          ListingStatus @default(PENDING_APPROVAL)
+  rejectionReason String?
+  viewCount       Int           @default(0)
+  favoriteCount   Int           @default(0)
+  featured        Boolean       @default(false)
+  featuredUntil   DateTime?
+
+  // Location
+  wilaya String // Algerian state
+  city   String?
+
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  bids            Bid[]
+  orders          Order[]
+  moderationQueue ModerationQueue[]
+
+  @@index([sellerId])
+  @@index([status])
+  @@index([auctionType])
+  @@index([model])
+  @@index([condition])
+  @@index([currentBid])
+  @@index([auctionEnd])
+  @@index([wilaya])
+  @@index([featured, status])
+  @@index([createdAt])
+}
+
+model Bid {
+  id        String  @id @default(cuid())
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  amount  Decimal @db.Decimal(12, 2)
+  bidType BidType @default(MANUAL)
+
+  // Proxy bidding
+  proxyMaxAmount   Decimal? @db.Decimal(12, 2)
+  isAutoBid        Boolean  @default(false)
+  triggeredByProxy Boolean  @default(false)
+  parentProxyBidId String?
+  parentProxyBid   Bid?     @relation("ProxyBidChain", fields: [parentProxyBidId], references: [id])
+  childProxyBids   Bid[]    @relation("ProxyBidChain")
+
+  // Tracking
+  wasWinning Boolean   @default(false)
+  outbidAt   DateTime?
+  ipAddress  String?
+  deviceInfo Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([listingId])
+  @@index([userId])
+  @@index([listingId, createdAt])
+  @@index([amount])
+  @@index([isAutoBid])
+}
+
+model Order {
+  id        String  @id @default(cuid())
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Restrict)
+  buyerId   String
+  buyer     User    @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  sellerId  String
+  seller    User    @relation("SellerOrders", fields: [sellerId], references: [id], onDelete: Restrict)
+
+  // Pricing
+  finalPrice       Decimal @db.Decimal(12, 2)
+  commissionAmount Decimal @default(0) @db.Decimal(12, 2)
+  shippingCost     Decimal @default(0) @db.Decimal(12, 2)
+  totalAmount      Decimal @db.Decimal(12, 2)
+
+  // Payment
+  paymentMethod PaymentMethod @default(COD)
+  codAmount     Decimal?      @db.Decimal(12, 2)
+  codToken      String?       @unique // token for COD verification
+  paymentRef    String? // external payment reference
+  paidAt        DateTime?
+
+  // Shipping
+  courierName     String?
+  courierRef      String? // courier tracking number
+  shippingAddress Json
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+
+  // Status
+  status          OrderStatus @default(PENDING)
+  cancelledReason String?
+  cancelledAt     DateTime?
+
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  review           Review?
+  disputes         Dispute[]
+  commissionLedger CommissionLedger[]
+  courierWebhooks  CourierWebhook[]
+
+  @@index([listingId])
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([status])
+  @@index([paymentMethod])
+  @@index([codToken])
+  @@index([courierRef])
+  @@index([createdAt])
+}
+
+model Review {
+  id         String @id @default(cuid())
+  orderId    String @unique
+  order      Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  reviewerId String
+  reviewer   User   @relation("ReviewerReviews", fields: [reviewerId], references: [id], onDelete: Restrict)
+  targetId   String
+  target     User   @relation("TargetReviews", fields: [targetId], references: [id], onDelete: Restrict)
+
+  rating     Int // 1-5
+  tags       Json? // array of tag strings
+  comment    String?
+  isPublic   Boolean @default(true)
+  isVerified Boolean @default(true) // verified purchase
+
+  // Moderation
+  flagged       Boolean @default(false)
+  flaggedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([targetId])
+  @@index([reviewerId])
+  @@index([orderId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+model Broadcast {
+  id       String @id @default(cuid())
+  senderId String
+  sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  channel BroadcastChannel
+  status  BroadcastStatus  @default(DRAFT)
+
+  // Audience
+  audienceType   String // ALL, SEGMENT, INDIVIDUAL
+  audienceFilter Json? // targeting criteria
+  recipientIds   Json? // explicit list of user IDs
+
+  // Content
+  title     String
+  content   String
+  mediaUrl  String?
+  actionUrl String? // deep link
+
+  // Credits
+  creditCost      Int     @default(0)
+  creditsDeducted Boolean @default(false)
+
+  // Scheduling
+  scheduledAt DateTime?
+  sentAt      DateTime?
+
+  // Analytics (aggregated here, detailed in BroadcastAnalytics)
+  sentCount      Int @default(0)
+  deliveredCount Int @default(0)
+  openedCount    Int @default(0)
+  clickedCount   Int @default(0)
+  convertedCount Int @default(0)
+
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  analytics BroadcastAnalytics[]
+
+  @@index([senderId])
+  @@index([channel])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([createdAt])
+}
+
+model Follow {
+  id          String @id @default(cuid())
+  followerId  String
+  follower    User   @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User   @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  // Notification preferences
+  notifyOnListing Boolean @default(true)
+  notifyOnAuction Boolean @default(true)
+  notifyOnSale    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+model OTPVerification {
+  id          String             @id @default(cuid())
+  phone       String
+  code        String
+  method      VerificationMethod @default(SMS)
+  expiresAt   DateTime
+  attempts    Int                @default(0)
+  maxAttempts Int                @default(5)
+  verified    Boolean            @default(false)
+  verifiedAt  DateTime?
+  ipAddress   String?
+  userId      String?
+  user        User?              @relation("UserOtpVerifications", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime           @default(now())
+
+  @@index([phone])
+  @@index([expiresAt])
+  @@index([verified])
+  @@index([createdAt])
+  @@index([userId])
+}
+
+model CommissionLedger {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  // Commission breakdown
+  commissionAmount Decimal @db.Decimal(12, 2)
+  platformFee      Decimal @db.Decimal(12, 2)
+  paymentFee       Decimal @default(0) @db.Decimal(12, 2)
+  netToSeller      Decimal @db.Decimal(12, 2)
+  breakdown        Json? // detailed breakdown
+
+  settled       Boolean   @default(false)
+  settledAt     DateTime?
+  settlementRef String? // reference to payout batch
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([settled])
+  @@index([settledAt])
+  @@index([createdAt])
+}
+
+model PayoutRequest {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  amount        Decimal      @db.Decimal(12, 2)
+  method        PayoutMethod
+  payoutDetails Json // account details based on method
+
+  status          PayoutStatus @default(PENDING)
+  processedBy     String?
+  processedAt     DateTime?
+  rejectionReason String?
+
+  // Tracking
+  reference     String? @unique
+  transactionId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([method])
+  @@index([createdAt])
+}
+
+model Dispute {
+  id         String  @id @default(cuid())
+  orderId    String
+  order      Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  reporterId String
+  reporter   User    @relation("DisputeReporter", fields: [reporterId], references: [id], onDelete: Restrict)
+  targetId   String?
+  target     User?   @relation("DisputeTarget", fields: [targetId], references: [id], onDelete: SetNull)
+
+  reason      String
+  category    String // ITEM_NOT_AS_DESCRIBED, NOT_RECEIVED, FRAUD, OTHER
+  description String
+  evidence    Json? // array of photo URLs, messages, etc.
+
+  status          DisputeStatus      @default(OPEN)
+  resolution      DisputeResolution?
+  resolutionNotes String?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+
+  // Trust impact
+  trustImpact  Int     @default(0) // points to deduct/add
+  trustApplied Boolean @default(false)
+
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([reporterId])
+  @@index([status])
+  @@index([category])
+  @@index([createdAt])
+}
+
+model CourierWebhook {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  event       String // tracking event from courier
+  payload     Json // raw webhook payload
+  processed   Boolean   @default(false)
+  processedAt DateTime?
+  retryCount  Int       @default(0)
+  maxRetries  Int       @default(3)
+  lastError   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([processed])
+  @@index([event])
+  @@index([createdAt])
+}
+
+model BroadcastAnalytics {
+  id          String    @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+
+  impressions Int @default(0)
+  clicks      Int @default(0)
+  conversions Int @default(0)
+  uniqueUsers Int @default(0)
+
+  // Per-recipient tracking
+  userId      String?
+  delivered   Boolean   @default(false)
+  deliveredAt DateTime?
+  opened      Boolean   @default(false)
+  openedAt    DateTime?
+  clicked     Boolean   @default(false)
+  clickedAt   DateTime?
+  converted   Boolean   @default(false)
+  convertedAt DateTime?
+
+  // Device/platform
+  device   String?
+  platform String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([broadcastId])
+  @@index([userId])
+  @@index([delivered])
+  @@index([opened])
+  @@index([clicked])
+}
+
+model ModerationQueue {
+  id String @id @default(cuid())
+
+  // What is being moderated
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  reason        String
+  category      String // INAPPROPRIATE, FRAUD, SPAM, COUNTERFEIT, OTHER
+  description   String
+  evidence      Json? // screenshots, reports, etc.
+  reporterId    String?
+  reporterPhone String?
+
+  status      ModerationStatus @default(PENDING)
+  action      ModerationAction @default(NONE)
+  actionNotes String?
+
+  // Moderator
+  moderatorId String?
+  reviewedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([listingId])
+  @@index([userId])
+  @@index([status])
+  @@index([category])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id      String  @id @default(cuid())
+  adminId String?
+  admin   User?   @relation(fields: [adminId], references: [id], onDelete: SetNull)
+
+  action     AuditAction
+  entityType String // User, Listing, Order, PayoutRequest, etc.
+  entityId   String
+  changes    Json? // before/after diff
+  reason     String?
+  ipAddress  String?
+  userAgent  String?
+
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  channel NotificationChannel @default(IN_APP)
+
+  title     String
+  body      String
+  data      Json? // additional payload
+  actionUrl String? // deep link or URL
+
+  read      Boolean   @default(false)
+  readAt    DateTime?
+  clicked   Boolean   @default(false)
+  clickedAt DateTime?
+
+  // Delivery
+  sent          Boolean   @default(false)
+  sentAt        DateTime?
+  delivered     Boolean   @default(false)
+  deliveredAt   DateTime?
+  deliveryError String?
+
+  // Scheduling
+  scheduledFor DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([read])
+  @@index([channel])
+  @@index([userId, read, createdAt])
+  @@index([createdAt])
+}
+
+enum KycStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  SYSTEM
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  buyerId   String
+  buyer     User     @relation("ConversationBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId  String
+  seller    User     @relation("ConversationSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+  listingId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages Message[]
+
+  @@unique([buyerId, sellerId, listingId])
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([listingId])
+  @@index([updatedAt])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  content        String
+  type           MessageType  @default(TEXT)
+  imageUrl       String?
+  read           Boolean      @default(false)
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([conversationId, createdAt])
+  @@index([read])
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
